@@ -1,6 +1,7 @@
 import express from "express";
 import { WebClient } from "@slack/web-api";
 import bodyParser from "body-parser";
+import { getQueryResponse } from "./services/queryService";
 require("dotenv").config();
 
 const app = express();
@@ -8,17 +9,29 @@ const slackClient = new WebClient(process.env.SLACK_BOT_TOKEN);
 
 app.use(bodyParser.json());
 
+const processedEvents = new Set<string>();
+
 app.post(
   "/slack/events",
-  (req: express.Request, res: express.Response): void => {
-    const { type, challenge, event } = req.body;
+  async (req: express.Request, res: express.Response) => {
+    const { type, challenge, event, event_id } = req.body;
     // Respond to Slack URL verification
     if (type === "url_verification") {
       res.status(200).send({ challenge });
     }
+    res.status(200).send();
+
+    if (processedEvents.has(event_id)) {
+      res.status(200).send(); // Already handled
+    }
+
+    // Mark this event_id as processed
+    processedEvents.add(event_id);
 
     // Respond to message events
     if (event && event.type === "message" && !event.subtype && !event.bot_id) {
+      const userMessage = event.text;
+
       const mentionedBot = event.text.includes(`<@${process.env.BOT_USER_ID}>`);
 
       if (mentionedBot) {
@@ -29,12 +42,15 @@ app.post(
           })
           .catch(console.error);
       } else {
-        slackClient.chat
-          .postMessage({
+        try {
+          const responseText = await getQueryResponse(userMessage);
+          await slackClient.chat.postMessage({
             channel: event.channel,
-            text: `You said: ${event.text}`,
-          })
-          .catch(console.error);
+            text: responseText,
+          });
+        } catch (error) {
+          console.error("Error sending message to Slack:", error);
+        }
       }
     }
 
